@@ -1,0 +1,21 @@
+# Data files (contain server-specific usage history)
+data/
+
+# Log files (contain server-specific execution logs)
+logs/
+
+# Generated reports (contain server-specific summaries)
+reports/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Editor backups
+*~
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
