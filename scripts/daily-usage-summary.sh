@@ -508,6 +508,15 @@ main() {
 
     log_message "Cleaned up files older than $DATA_RETENTION_DAYS days"
 
+    # Send to Discord
+    log_message "Sending report to Discord..."
+    source "$SCRIPT_DIR/send-discord-report.sh"
+    if send_to_discord; then
+        log_message "Successfully sent report to Discord"
+    else
+        log_message "Failed to send report to Discord"
+    fi
+
     # Display report if --show flag is provided
     if [ "$1" = "--show" ]; then
         cat "$REPORT_FILE"
