@@ -123,6 +123,141 @@ analyze_gpu_metrics() {
     }' "$GPU_CSV"
 }
 
+analyze_usage_by_period() {
+    if [ ! -f "$SYSTEM_CSV" ]; then
+        echo "PERIOD_0006_CPU=0"
+        echo "PERIOD_0006_GPU=0"
+        echo "PERIOD_0612_CPU=0"
+        echo "PERIOD_0612_GPU=0"
+        echo "PERIOD_1218_CPU=0"
+        echo "PERIOD_1218_GPU=0"
+        echo "PERIOD_1824_CPU=0"
+        echo "PERIOD_1824_GPU=0"
+        return
+    fi
+
+    # Calculate CPU averages for each 6-hour period
+    awk -F',' 'NR>1 {
+        # Extract hour from ISO 8601 timestamp
+        split($1, dt, "T");
+        split(dt[2], tm, ":");
+        hour = int(tm[1]);
+        cpu = $3;
+
+        if (hour >= 0 && hour < 6) {
+            period_0006_cpu_sum += cpu;
+            period_0006_count++;
+        } else if (hour >= 6 && hour < 12) {
+            period_0612_cpu_sum += cpu;
+            period_0612_count++;
+        } else if (hour >= 12 && hour < 18) {
+            period_1218_cpu_sum += cpu;
+            period_1218_count++;
+        } else {
+            period_1824_cpu_sum += cpu;
+            period_1824_count++;
+        }
+    }
+    END {
+        printf "PERIOD_0006_CPU=%.0f\n", (period_0006_count > 0 ? period_0006_cpu_sum/period_0006_count : 0);
+        printf "PERIOD_0612_CPU=%.0f\n", (period_0612_count > 0 ? period_0612_cpu_sum/period_0612_count : 0);
+        printf "PERIOD_1218_CPU=%.0f\n", (period_1218_count > 0 ? period_1218_cpu_sum/period_1218_count : 0);
+        printf "PERIOD_1824_CPU=%.0f\n", (period_1824_count > 0 ? period_1824_cpu_sum/period_1824_count : 0);
+    }' "$SYSTEM_CSV"
+
+    # Calculate GPU averages for each period if GPU data exists
+    if [ -f "$GPU_CSV" ]; then
+        awk -F',' 'NR>1 {
+            # Extract hour from ISO 8601 timestamp
+            split($1, dt, "T");
+            split(dt[2], tm, ":");
+            hour = int(tm[1]);
+            gpu_util = $5;
+
+            if (hour >= 0 && hour < 6) {
+                period_0006_gpu_sum += gpu_util;
+                period_0006_gpu_count++;
+            } else if (hour >= 6 && hour < 12) {
+                period_0612_gpu_sum += gpu_util;
+                period_0612_gpu_count++;
+            } else if (hour >= 12 && hour < 18) {
+                period_1218_gpu_sum += gpu_util;
+                period_1218_gpu_count++;
+            } else {
+                period_1824_gpu_sum += gpu_util;
+                period_1824_gpu_count++;
+            }
+        }
+        END {
+            printf "PERIOD_0006_GPU=%.0f\n", (period_0006_gpu_count > 0 ? period_0006_gpu_sum/period_0006_gpu_count : 0);
+            printf "PERIOD_0612_GPU=%.0f\n", (period_0612_gpu_count > 0 ? period_0612_gpu_sum/period_0612_gpu_count : 0);
+            printf "PERIOD_1218_GPU=%.0f\n", (period_1218_gpu_count > 0 ? period_1218_gpu_sum/period_1218_gpu_count : 0);
+            printf "PERIOD_1824_GPU=%.0f\n", (period_1824_gpu_count > 0 ? period_1824_gpu_sum/period_1824_gpu_count : 0);
+        }' "$GPU_CSV"
+    else
+        echo "PERIOD_0006_GPU=0"
+        echo "PERIOD_0612_GPU=0"
+        echo "PERIOD_1218_GPU=0"
+        echo "PERIOD_1824_GPU=0"
+    fi
+}
+
+analyze_user_usage() {
+    if [ ! -f "$SYSTEM_CSV" ]; then
+        echo ""
+        return
+    fi
+
+    # Extract user CPU time from system CSV
+    awk -F',' 'NR>1 {
+        cpu = $3;
+        split($10, user_arr, ";");
+        for (i in user_arr) {
+            if (user_arr[i] != "") {
+                # Each sample is 5 minutes, accumulate CPU-weighted time
+                user_cpu_time[user_arr[i]] += (cpu / 100) * 5 / 60;  # hours
+            }
+        }
+    }
+    END {
+        for (u in user_cpu_time) {
+            printf "USER_%s_CPU_TIME=%.1f\n", u, user_cpu_time[u];
+        }
+    }' "$SYSTEM_CSV"
+
+    # Extract user GPU time and peak VRAM from GPU CSV
+    if [ -f "$GPU_CSV" ]; then
+        awk -F',' 'NR>1 {
+            gpu_util = $5;
+            processes = $9;
+            vram_used = $6;
+
+            # Parse processes field (format: user:cmd;user:cmd)
+            split(processes, proc_arr, ";");
+            for (i in proc_arr) {
+                if (proc_arr[i] != "idle" && proc_arr[i] != "") {
+                    split(proc_arr[i], user_cmd, ":");
+                    user = user_cmd[1];
+
+                    # Each sample is 5 minutes, accumulate GPU-weighted time
+                    user_gpu_time[user] += (gpu_util / 100) * 5 / 60;  # hours
+
+                    # Track peak VRAM per user
+                    if (vram_used > user_peak_vram[user]) {
+                        user_peak_vram[user] = vram_used;
+                    }
+                }
+            }
+        }
+        END {
+            for (u in user_gpu_time) {
+                printf "USER_%s_GPU_TIME=%.1f\n", u, user_gpu_time[u];
+                printf "USER_%s_PEAK_VRAM=%d\n", u, user_peak_vram[u];
+            }
+        }' "$GPU_CSV"
+    fi
+}
+
 ################################################################################
 # Report Generation Functions (separate for Discord integration later)
 ################################################################################
@@ -135,7 +270,15 @@ generate_report_text() {
     local disk_root=$5
     local disk_home=$6
     local users=$7
-    shift 7
+    local period_0006_cpu=$8
+    local period_0006_gpu=$9
+    local period_0612_cpu=${10}
+    local period_0612_gpu=${11}
+    local period_1218_cpu=${12}
+    local period_1218_gpu=${13}
+    local period_1824_cpu=${14}
+    local period_1824_gpu=${15}
+    shift 15
     local gpu_data=("$@")
 
     # Header
@@ -173,9 +316,49 @@ EOF
         echo ""
     fi
 
+    # Usage by period
+    cat << EOF
+[USAGE BY PERIOD]
+--------------------------------------------------------------------------------
+00-06:  CPU ${period_0006_cpu}% | GPU ${period_0006_gpu}%
+06-12:  CPU ${period_0612_cpu}% | GPU ${period_0612_gpu}%
+12-18:  CPU ${period_1218_cpu}% | GPU ${period_1218_gpu}%
+18-24:  CPU ${period_1824_cpu}% | GPU ${period_1824_gpu}%
+
+EOF
+
+    # User usage breakdown
+    echo "[USER USAGE]"
+    echo "--------------------------------------------------------------------------------"
+    printf "%-10s %-12s %-12s %-12s\n" "User" "CPU Time" "GPU Time" "Peak VRAM"
+
+    # Get all users and their stats
+    local user_list=()
+    for var in $(set | grep '^USER_.*_CPU_TIME=' | cut -d= -f1); do
+        local username=$(echo "$var" | sed 's/USER_\(.*\)_CPU_TIME/\1/')
+        user_list+=("$username")
+    done
+
+    # Sort users alphabetically
+    IFS=$'\n' sorted_users=($(sort <<<"${user_list[*]}"))
+    unset IFS
+
+    for username in "${sorted_users[@]}"; do
+        eval "cpu_time=\${USER_${username}_CPU_TIME:-0.0}"
+        eval "gpu_time=\${USER_${username}_GPU_TIME:-0.0}"
+        eval "peak_vram=\${USER_${username}_PEAK_VRAM:--}"
+
+        printf "%-10s %-12s %-12s %-12s\n" \
+            "$username" \
+            "${cpu_time}h" \
+            "${gpu_time}h" \
+            "$([ "$peak_vram" = "-" ] && echo "-" || echo "${peak_vram} MB")"
+    done
+    echo ""
+
     # Disk and users
     cat << EOF
-[STORAGE & USERS]
+[STORAGE & ACTIVE USERS]
 --------------------------------------------------------------------------------
 Disk:   / ${disk_root}% | /home ${disk_home}%
 Users:  ${users}
@@ -207,6 +390,24 @@ EOF
     # Check RAM usage
     if [ "$ram_avg" -gt 80 ]; then
         echo "⚠ High average RAM usage: ${ram_avg}%"
+        has_warnings=1
+    fi
+
+    # Check time-based CPU warnings (>70% in any period)
+    if [ "$period_0006_cpu" -gt 70 ]; then
+        echo "⚠ CPU utilization was high during 00:00–06:00 (${period_0006_cpu}%)"
+        has_warnings=1
+    fi
+    if [ "$period_0612_cpu" -gt 70 ]; then
+        echo "⚠ CPU utilization was high during 06:00–12:00 (${period_0612_cpu}%)"
+        has_warnings=1
+    fi
+    if [ "$period_1218_cpu" -gt 70 ]; then
+        echo "⚠ CPU utilization was high during 12:00–18:00 (${period_1218_cpu}%)"
+        has_warnings=1
+    fi
+    if [ "$period_1824_cpu" -gt 70 ]; then
+        echo "⚠ CPU utilization was high during 18:00–24:00 (${period_1824_cpu}%)"
         has_warnings=1
     fi
 
@@ -279,12 +480,22 @@ main() {
         done
     fi
 
+    # Analyze usage by period
+    eval "$(analyze_usage_by_period)"
+
+    # Analyze user usage
+    eval "$(analyze_user_usage)"
+
     # Generate report
     generate_report_text \
         "${CPU_AVG:-N/A}" "${CPU_PEAK:-N/A}" \
         "${RAM_AVG:-N/A}" "${RAM_PEAK:-N/A}" \
         "${DISK_ROOT:-N/A}" "${DISK_HOME:-N/A}" \
         "${USERS:-none}" \
+        "${PERIOD_0006_CPU:-0}" "${PERIOD_0006_GPU:-0}" \
+        "${PERIOD_0612_CPU:-0}" "${PERIOD_0612_GPU:-0}" \
+        "${PERIOD_1218_CPU:-0}" "${PERIOD_1218_GPU:-0}" \
+        "${PERIOD_1824_CPU:-0}" "${PERIOD_1824_GPU:-0}" \
         "${GPU_STATS[@]}" \
         > "$REPORT_FILE"
 
