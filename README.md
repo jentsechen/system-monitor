@@ -8,7 +8,9 @@ Automated system and GPU usage monitoring with historical data collection and da
 - ✅ **CSV Storage**: Historical data stored in ISO 8601 formatted CSV files
 - ✅ **GPU Support**: Automatic NVIDIA GPU monitoring with graceful fallback if no GPU exists
 - ✅ **Daily Summaries**: Concise daily usage reports with averages, peaks, and warnings
-- ✅ **Intelligent Warnings**: Automatic detection of disk usage, idle GPUs, and resource issues
+- ✅ **Time-Based Analytics**: Usage breakdown across 6-hour periods (00-06, 06-12, 12-18, 18-24)
+- ✅ **Per-User Tracking**: Individual CPU/GPU usage hours and peak VRAM consumption per user
+- ✅ **Intelligent Warnings**: Automatic detection of disk usage, idle GPUs, time-specific high CPU, and resource issues
 - ✅ **Automatic Cleanup**: Data older than 90 days is automatically removed
 - ✅ **Discord-Ready**: Report generation separated from collection for easy webhook integration
 
@@ -99,14 +101,29 @@ RAM:    avg 28% | peak 58%
 GPU 0:  avg  61% | peak 100% | active 18.2h | VRAM 48950/49140 MB
 GPU 1:  avg   3% | peak  42% | active  1.1h | VRAM 12400/49140 MB
 
-[STORAGE & USERS]
+[USAGE BY PERIOD]
+--------------------------------------------------------------------------------
+00-06:  CPU 12% | GPU  8%
+06-12:  CPU 45% | GPU 42%
+12-18:  CPU 78% | GPU 85%
+18-24:  CPU 52% | GPU 61%
+
+[USER USAGE]
+--------------------------------------------------------------------------------
+User       CPU Time     GPU Time     Peak VRAM
+alice      4.2h         12.5h        45280 MB
+bob        8.1h         3.2h         12400 MB
+charlie    2.5h         0.0h         -
+
+[STORAGE & ACTIVE USERS]
 --------------------------------------------------------------------------------
 Disk:   / 25% | /home 37%
-Users:  user1, user2, user3
+Users:  alice, bob, charlie
 
 [WARNINGS]
 --------------------------------------------------------------------------------
 ⚠ GPU 1 was mostly idle (avg 3%)
+⚠ CPU utilization was high during 12:00–18:00 (78%)
 
 ================================================================================
 ```
@@ -117,6 +134,7 @@ The daily summary automatically detects and reports:
 
 - **Disk Usage**: Alerts when disk usage exceeds 80%
 - **High CPU/RAM**: Alerts when average usage exceeds 80%
+- **Time-Based CPU Usage**: Alerts when CPU utilization exceeds 70% in any 6-hour period
 - **Idle GPU**: Alerts when GPU average utilization is below 10%
 - **Heavy GPU Usage**: Alerts when GPU is active for more than 20 hours
 
