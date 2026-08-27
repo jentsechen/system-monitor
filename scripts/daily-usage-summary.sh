@@ -14,6 +14,11 @@ DATA_DIR="$BASE_DIR/data/usage"
 REPORT_DIR="$BASE_DIR/reports/usage"
 LOG_DIR="$BASE_DIR/logs"
 
+# Load environment variables from .env file if it exists
+if [ -f "$BASE_DIR/.env" ]; then
+    source "$BASE_DIR/.env"
+fi
+
 # Thresholds (configurable)
 DISK_WARNING_THRESHOLD=80
 IDLE_GPU_THRESHOLD=10

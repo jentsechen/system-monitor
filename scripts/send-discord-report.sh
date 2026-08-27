@@ -8,7 +8,17 @@
 ################################################################################
 
 # Configuration
+# IMPORTANT: Set DISCORD_WEBHOOK_URL as an environment variable
+# Example: export DISCORD_WEBHOOK_URL="your-webhook-url"
+# Or create a .env file in the project root (see README)
 DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL:-}"
+
+# Validate webhook URL is set
+if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+    echo "ERROR: DISCORD_WEBHOOK_URL environment variable is not set"
+    echo "Please set it in your environment or create a .env file"
+    exit 1
+fi
 
 # Colors (Discord uses decimal color codes)
 COLOR_SUCCESS=5763719    # Green

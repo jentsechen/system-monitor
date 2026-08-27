@@ -1,3 +1,9 @@
+# Sensitive credentials (NEVER commit these!)
+.env
+.env.*
+config.secret
+*.secret
+
 # Data files (contain server-specific usage history)
 data/
 
