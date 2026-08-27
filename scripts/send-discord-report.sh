@@ -13,13 +13,6 @@
 # Or create a .env file in the project root (see README)
 DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL:-}"
 
-# Validate webhook URL is set
-if [ -z "$DISCORD_WEBHOOK_URL" ]; then
-    echo "ERROR: DISCORD_WEBHOOK_URL environment variable is not set"
-    echo "Please set it in your environment or create a .env file"
-    exit 1
-fi
-
 # Colors (Discord uses decimal color codes)
 COLOR_SUCCESS=5763719    # Green
 COLOR_WARNING=16776960   # Yellow
@@ -328,6 +321,13 @@ EOF
 ################################################################################
 
 send_to_discord() {
+    # Check if webhook URL is configured
+    if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+        echo "Discord webhook not configured (DISCORD_WEBHOOK_URL not set)"
+        echo "Skipping Discord notification. To enable, create .env file with DISCORD_WEBHOOK_URL"
+        return 1
+    fi
+
     # Build the payload
     local payload=$(build_discord_payload \
         "${CPU_AVG:-N/A}" "${CPU_PEAK:-N/A}" \
