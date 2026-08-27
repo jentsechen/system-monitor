@@ -30,6 +30,7 @@ TODAY=$(date '+%Y-%m-%d')
 # File paths
 SYSTEM_CSV="$DATA_DIR/system-$YESTERDAY.csv"
 GPU_CSV="$DATA_DIR/gpu-$YESTERDAY.csv"
+PROCESS_CSV="$DATA_DIR/process-$YESTERDAY.csv"
 REPORT_FILE="$REPORT_DIR/usage-summary-$YESTERDAY.txt"
 LOG_FILE="$LOG_DIR/summary.log"
 
@@ -258,6 +259,144 @@ analyze_user_usage() {
     fi
 }
 
+analyze_process_metrics() {
+    if [ ! -f "$PROCESS_CSV" ]; then
+        log_message "No process data found: $PROCESS_CSV"
+        echo ""
+        return
+    fi
+
+    # Analyze process metrics: per-user, per-command CPU usage
+    # Output format: PROC_<USER>_<COMMAND>_AVG, PROC_<USER>_<COMMAND>_PEAK, PROC_<USER>_<COMMAND>_HOURS
+    awk -F',' 'NR>1 {
+        user = $3;
+        command = toupper($4);  # Normalize to uppercase
+        cpu_percent = $5;
+
+        key = user "_" command;
+
+        # Accumulate CPU percentage
+        proc_cpu_sum[key] += cpu_percent;
+        proc_cpu_count[key]++;
+
+        # Track peak
+        if (cpu_percent > proc_cpu_peak[key]) {
+            proc_cpu_peak[key] = cpu_percent;
+        }
+
+        # Track if process was active (>1%)
+        if (cpu_percent > 1.0) {
+            proc_active_count[key]++;
+        }
+
+        # Store user and command separately for later use
+        proc_user[key] = user;
+        proc_command[key] = command;
+    }
+    END {
+        for (key in proc_cpu_sum) {
+            avg_cpu = proc_cpu_sum[key] / proc_cpu_count[key];
+            peak_cpu = proc_cpu_peak[key];
+            active_hours = (proc_active_count[key] * 5) / 60;  # 5-min intervals to hours
+
+            user = proc_user[key];
+            command = proc_command[key];
+
+            # Output with normalized variable names (replace special chars with _)
+            gsub(/[^a-zA-Z0-9_]/, "_", key);
+            printf "PROC_%s_AVG=%.0f\n", key, avg_cpu;
+            printf "PROC_%s_PEAK=%.0f\n", key, peak_cpu;
+            printf "PROC_%s_HOURS=%.1f\n", key, active_hours;
+            printf "PROC_%s_USER=%s\n", key, user;
+            printf "PROC_%s_CMD=%s\n", key, command;
+        }
+    }' "$PROCESS_CSV"
+}
+
+analyze_cpu_attribution() {
+    if [ ! -f "$PROCESS_CSV" ]; then
+        echo "ATTR_MATLAB=0"
+        echo "ATTR_PYTHON=0"
+        echo "ATTR_OTHER=0"
+        echo "ATTR_IDLE=0"
+        return
+    fi
+
+    # Get total system CPU from system CSV
+    if [ ! -f "$SYSTEM_CSV" ]; then
+        echo "ATTR_MATLAB=0"
+        echo "ATTR_PYTHON=0"
+        echo "ATTR_OTHER=0"
+        echo "ATTR_IDLE=0"
+        return
+    fi
+
+    # Calculate total CPU usage and attribution by process type
+    awk -F',' -v system_csv="$SYSTEM_CSV" '
+    BEGIN {
+        # Read system CPU data to get total CPU usage
+        total_cpu_sum = 0;
+        total_cpu_count = 0;
+        while ((getline < system_csv) > 0) {
+            if (NR == 1) continue;  # Skip header
+            split($0, fields, ",");
+            total_cpu_sum += fields[3];
+            total_cpu_count++;
+        }
+        close(system_csv);
+        avg_total_cpu = total_cpu_sum / total_cpu_count;
+    }
+    NR>1 {
+        command = toupper($4);
+        cpu_percent = $5;
+
+        # Categorize by command
+        if (command ~ /MATLAB/) {
+            matlab_cpu += cpu_percent;
+            matlab_count++;
+        } else if (command ~ /PYTHON/) {
+            python_cpu += cpu_percent;
+            python_count++;
+        } else {
+            other_cpu += cpu_percent;
+            other_count++;
+        }
+
+        total_proc_cpu += cpu_percent;
+        total_proc_count++;
+    }
+    END {
+        # Calculate averages
+        avg_matlab = (matlab_count > 0) ? matlab_cpu / matlab_count : 0;
+        avg_python = (python_count > 0) ? python_cpu / python_count : 0;
+        avg_other = (other_count > 0) ? other_cpu / other_count : 0;
+        avg_proc_total = (total_proc_count > 0) ? total_proc_cpu / total_proc_count : 0;
+
+        # Calculate percentage of total system CPU
+        # Note: avg_total_cpu is the average system-wide CPU %
+        # Process CPU percentages are per-core, so we need to normalize
+        if (avg_total_cpu > 0) {
+            matlab_pct = (avg_matlab / avg_total_cpu) * 100;
+            python_pct = (avg_python / avg_total_cpu) * 100;
+            other_pct = (avg_other / avg_total_cpu) * 100;
+            idle_pct = 100 - (matlab_pct + python_pct + other_pct);
+
+            # Ensure idle is not negative
+            if (idle_pct < 0) idle_pct = 0;
+        } else {
+            matlab_pct = 0;
+            python_pct = 0;
+            other_pct = 0;
+            idle_pct = 100;
+        }
+
+        printf "ATTR_MATLAB=%.0f\n", matlab_pct;
+        printf "ATTR_PYTHON=%.0f\n", python_pct;
+        printf "ATTR_OTHER=%.0f\n", other_pct;
+        printf "ATTR_IDLE=%.0f\n", idle_pct;
+    }' "$PROCESS_CSV"
+}
+
 ################################################################################
 # Report Generation Functions (separate for Discord integration later)
 ################################################################################
@@ -330,7 +469,7 @@ EOF
     # User usage breakdown
     echo "[USER USAGE]"
     echo "--------------------------------------------------------------------------------"
-    printf "%-10s %-12s %-12s %-12s\n" "User" "CPU Time" "GPU Time" "Peak VRAM"
+    printf "%-10s %-15s %-15s %-12s\n" "User" "CPU Time" "GPU Time" "Peak VRAM"
 
     # Get all users and their stats
     local user_list=()
@@ -348,12 +487,80 @@ EOF
         eval "gpu_time=\${USER_${username}_GPU_TIME:-0.0}"
         eval "peak_vram=\${USER_${username}_PEAK_VRAM:--}"
 
-        printf "%-10s %-12s %-12s %-12s\n" \
+        printf "%-10s %-15s %-15s %-12s\n" \
             "$username" \
             "${cpu_time}h" \
             "${gpu_time}h" \
             "$([ "$peak_vram" = "-" ] && echo "-" || echo "${peak_vram} MB")"
     done
+    echo ""
+
+    # CPU Consumers section (percentage normalized to server = 100%)
+    echo "🔥 CPU Consumers"
+    echo "--------------------------------------------------------------------------------"
+
+    # Get all process data and organize by user
+    local proc_list=()
+    for var in $(set | grep '^PROC_.*_AVG=' | cut -d= -f1); do
+        proc_list+=("$var")
+    done
+
+    # Build a user->processes map
+    declare -A user_processes
+    for proc_var in "${proc_list[@]}"; do
+        local proc_key=$(echo "$proc_var" | sed 's/_AVG$//')
+        eval "local proc_user=\${${proc_key}_USER}"
+
+        if [ -n "$proc_user" ]; then
+            if [ -z "${user_processes[$proc_user]}" ]; then
+                user_processes[$proc_user]="$proc_key"
+            else
+                user_processes[$proc_user]="${user_processes[$proc_user]} $proc_key"
+            fi
+        fi
+    done
+
+    # Display processes grouped by user
+    for username in "${sorted_users[@]}"; do
+        local procs="${user_processes[$username]}"
+        if [ -n "$procs" ]; then
+            echo "$username"
+
+            # Sort processes by avg CPU (descending)
+            local proc_array=($procs)
+            local sorted_procs=()
+
+            # Simple bubble sort by avg CPU
+            for proc in "${proc_array[@]}"; do
+                eval "local avg=\${${proc}_AVG:-0}"
+                sorted_procs+=("$avg:$proc")
+            done
+
+            IFS=$'\n' sorted_procs=($(sort -rn <<<"${sorted_procs[*]}"))
+            unset IFS
+
+            # Display each process
+            for item in "${sorted_procs[@]}"; do
+                local proc=$(echo "$item" | cut -d: -f2-)
+                eval "local cmd=\${${proc}_CMD}"
+                eval "local avg=\${${proc}_AVG}"
+                eval "local peak=\${${proc}_PEAK}"
+                eval "local hours=\${${proc}_HOURS}"
+
+                printf "  %-10s avg %2s%% | peak %2s%% | active %sh\n" \
+                    "$cmd" "$avg" "$peak" "$hours"
+            done
+            echo ""
+        fi
+    done
+
+    # CPU Attribution section
+    echo "🔥 CPU Attribution"
+    echo "--------------------------------------------------------------------------------"
+    printf "%-15s %3s%%\n" "MATLAB" "${ATTR_MATLAB:-0}"
+    printf "%-15s %3s%%\n" "Python" "${ATTR_PYTHON:-0}"
+    printf "%-15s %3s%%\n" "Other" "${ATTR_OTHER:-0}"
+    printf "%-15s %3s%%\n" "Idle" "${ATTR_IDLE:-0}"
     echo ""
 
     # Disk and users
@@ -442,11 +649,12 @@ EOF
     echo ""
 
     # Footer
+    local tomorrow=$(date -d 'tomorrow' '+%Y-%m-%d' 2>/dev/null || date -v +1d '+%Y-%m-%d')
     cat << EOF
 ================================================================================
 Report generated: $(date '+%Y-%m-%d %H:%M:%S')
 Data source: $YESTERDAY
-Next report: $TODAY
+Next report will cover: $TODAY (scheduled for $tomorrow 01:30)
 ================================================================================
 EOF
 }
@@ -486,6 +694,12 @@ main() {
     # Analyze user usage
     eval "$(analyze_user_usage)"
 
+    # Analyze process metrics
+    eval "$(analyze_process_metrics)"
+
+    # Analyze CPU attribution
+    eval "$(analyze_cpu_attribution)"
+
     # Generate report
     generate_report_text \
         "${CPU_AVG:-N/A}" "${CPU_PEAK:-N/A}" \
@@ -504,6 +718,7 @@ main() {
     # Clean up old data files (older than retention days)
     find "$DATA_DIR" -name "system-*.csv" -mtime +$DATA_RETENTION_DAYS -delete 2>/dev/null
     find "$DATA_DIR" -name "gpu-*.csv" -mtime +$DATA_RETENTION_DAYS -delete 2>/dev/null
+    find "$DATA_DIR" -name "process-*.csv" -mtime +$DATA_RETENTION_DAYS -delete 2>/dev/null
     find "$REPORT_DIR" -name "usage-summary-*.txt" -mtime +$DATA_RETENTION_DAYS -delete 2>/dev/null
 
     log_message "Cleaned up files older than $DATA_RETENTION_DAYS days"

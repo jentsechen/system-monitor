@@ -128,15 +128,76 @@ build_discord_payload() {
         fi
 
         if [ "$peak_vram" = "-" ]; then
-            user_usage="${user_usage}**${username}:** CPU ${cpu_time}h | GPU ${gpu_time}h"
+            user_usage="${user_usage}**${username}:** CPU Time ${cpu_time}h | GPU ${gpu_time}h"
         else
-            user_usage="${user_usage}**${username}:** CPU ${cpu_time}h | GPU ${gpu_time}h | VRAM ${peak_vram}MB"
+            user_usage="${user_usage}**${username}:** CPU Time ${cpu_time}h | GPU ${gpu_time}h | VRAM ${peak_vram}MB"
         fi
     done
 
     if [ -z "$user_usage" ]; then
         user_usage="No user activity recorded"
     fi
+
+    # Build CPU Consumers field
+    local cpu_consumers=""
+    local proc_list=()
+    for var in $(set | grep '^PROC_.*_AVG=' | cut -d= -f1); do
+        proc_list+=("$var")
+    done
+
+    # Build a user->processes map
+    declare -A user_processes_map
+    for proc_var in "${proc_list[@]}"; do
+        local proc_key=$(echo "$proc_var" | sed 's/_AVG$//')
+        eval "local proc_user=\${${proc_key}_USER}"
+
+        if [ -n "$proc_user" ]; then
+            if [ -z "${user_processes_map[$proc_user]}" ]; then
+                user_processes_map[$proc_user]="$proc_key"
+            else
+                user_processes_map[$proc_user]="${user_processes_map[$proc_user]} $proc_key"
+            fi
+        fi
+    done
+
+    # Build CPU consumers text
+    for username in "${sorted_users[@]}"; do
+        local procs="${user_processes_map[$username]}"
+        if [ -n "$procs" ]; then
+            if [ -n "$cpu_consumers" ]; then
+                cpu_consumers="${cpu_consumers}\n"
+            fi
+            cpu_consumers="${cpu_consumers}**${username}**\n"
+
+            # Sort processes by avg CPU
+            local proc_array=($procs)
+            local sorted_procs=()
+            for proc in "${proc_array[@]}"; do
+                eval "local avg=\${${proc}_AVG:-0}"
+                sorted_procs+=("$avg:$proc")
+            done
+            IFS=$'\n' sorted_procs=($(sort -rn <<<"${sorted_procs[*]}" 2>/dev/null))
+            unset IFS
+
+            # Display each process
+            for item in "${sorted_procs[@]}"; do
+                local proc=$(echo "$item" | cut -d: -f2-)
+                eval "local cmd=\${${proc}_CMD}"
+                eval "local avg=\${${proc}_AVG}"
+                eval "local peak=\${${proc}_PEAK}"
+                eval "local hours=\${${proc}_HOURS}"
+
+                cpu_consumers="${cpu_consumers}  ${cmd}: avg ${avg}% | peak ${peak}% | active ${hours}h\n"
+            done
+        fi
+    done
+
+    if [ -z "$cpu_consumers" ]; then
+        cpu_consumers="No process data available"
+    fi
+
+    # Build CPU Attribution field
+    local cpu_attribution="**MATLAB:** ${ATTR_MATLAB:-0}%\n**Python:** ${ATTR_PYTHON:-0}%\n**Other:** ${ATTR_OTHER:-0}%\n**Idle:** ${ATTR_IDLE:-0}%"
 
     # Build Storage field
     local storage_info="**Root (/):** ${disk_root}%\n**Home (/home):** ${disk_home}%\n**Active Users:** ${users}"
@@ -219,6 +280,16 @@ build_discord_payload() {
         {
           "name": ":busts_in_silhouette: User Usage",
           "value": "${user_usage}",
+          "inline": false
+        },
+        {
+          "name": ":fire: CPU Consumers",
+          "value": "${cpu_consumers}",
+          "inline": false
+        },
+        {
+          "name": ":fire: CPU Attribution",
+          "value": "${cpu_attribution}",
           "inline": false
         },
         {

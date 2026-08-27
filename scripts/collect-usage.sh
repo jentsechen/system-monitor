@@ -23,6 +23,7 @@ TIMESTAMP=$(date -Iseconds)  # ISO 8601 format with timezone
 # File paths
 SYSTEM_CSV="$DATA_DIR/system-$DATE_STAMP.csv"
 GPU_CSV="$DATA_DIR/gpu-$DATE_STAMP.csv"
+PROCESS_CSV="$DATA_DIR/process-$DATE_STAMP.csv"
 LOG_FILE="$LOG_DIR/collector.log"
 
 # Log function
@@ -134,6 +135,40 @@ collect_gpu_metrics() {
 }
 
 ################################################################################
+# Process Metrics Collection
+################################################################################
+
+collect_process_metrics() {
+    # Create CSV header if file doesn't exist
+    if [ ! -f "$PROCESS_CSV" ]; then
+        echo "timestamp,hostname,user,command,cpu_percent" > "$PROCESS_CSV"
+    fi
+
+    HOSTNAME=$(hostname)
+
+    # Get top CPU-consuming processes (>1% CPU)
+    # Use ps to get user, command, and CPU% for all processes
+    ps -eo user,comm,%cpu --sort=-%cpu --no-headers | while read -r user command cpu_percent; do
+        # Only record processes with CPU > 1%
+        if (( $(echo "$cpu_percent > 1.0" | bc -l 2>/dev/null || echo 0) )); then
+            # Clean up command name (remove full path, keep just the executable name)
+            command_clean=$(basename "$command")
+
+            # Prepare data line
+            DATA_LINE="$TIMESTAMP,$HOSTNAME,$user,$command_clean,$cpu_percent"
+
+            # Atomic write
+            TEMP_FILE="$PROCESS_CSV.tmp.$$"
+            echo "$DATA_LINE" >> "$TEMP_FILE"
+            cat "$TEMP_FILE" >> "$PROCESS_CSV"
+            rm -f "$TEMP_FILE"
+        fi
+    done
+
+    log_message "Process metrics collected"
+}
+
+################################################################################
 # Main Execution
 ################################################################################
 
@@ -145,6 +180,9 @@ main() {
 
     # Collect GPU metrics (if available)
     collect_gpu_metrics
+
+    # Collect process metrics
+    collect_process_metrics
 
     log_message "Collection completed successfully"
 }

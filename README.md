@@ -82,6 +82,131 @@ cat reports/usage/usage-summary-$(date -d 'yesterday' '+%Y-%m-%d').txt
 - **Temperature**: Degrees Celsius
 - **Processes**: Running processes with users and commands
 
+## Metrics Definitions
+
+### Understanding CPU/GPU Percentages
+
+**CPU/GPU percentages represent instantaneous capacity utilization, NOT time-based usage.**
+
+#### How Percentages Are Calculated
+
+For a system with **N CPU cores**:
+- **0%** = All cores are idle
+- **100%** = All cores are fully utilized
+- **50%** = Half of all cores are working (or all cores at half capacity)
+
+**Formula**: `CPU% = (cores being used) / (total cores available) × 100`
+
+**Example** (24-core system):
+- At 10:00:00, 16 cores are busy → CPU = 16/24 = **66.7%**
+- At 10:05:00, 24 cores are busy → CPU = 24/24 = **100%**
+
+#### Sampling Frequency
+
+- **Collection interval**: Every **5 minutes**
+- **Daily samples**: 288 data points (24 hours × 12 samples/hour)
+- **Sampling method**: `top -bn1` captures instantaneous CPU usage at collection time
+
+#### Average vs Peak
+
+**Average (avg)**:
+- Arithmetic mean of all 288 daily samples
+- Example: `avg 66%` = (sample₁ + sample₂ + ... + sample₂₈₈) / 288
+
+**Peak**:
+- Maximum value observed among all 288 samples
+- Example: `peak 100%` = at least one sample reached 100%
+
+#### Time Period Breakdown
+
+The report shows average CPU/GPU usage for four 6-hour periods:
+- **00-06**: Average of 72 samples (00:00-05:55)
+- **06-12**: Average of 72 samples (06:00-11:55)
+- **12-18**: Average of 72 samples (12:00-17:55)
+- **18-24**: Average of 72 samples (18:00-23:55)
+
+### Understanding CPU/GPU Time (Hours)
+
+**CPU Time represents total computational resources consumed, measured in core-hours.**
+
+#### Calculation Formula
+
+For a system with **N cores** over **24 hours**:
+- **Maximum possible CPU time** = N cores × 24 hours
+- **User's CPU time** = Sum of (process CPU usage × time running) for all user processes
+
+**Example** (24-core system):
+- User runs 2 cores at 100% for 8 hours = **16 core-hours**
+- User runs 1 core at 50% for 10 hours = **5 core-hours**
+- Total CPU time = **21 hours** (displayed as "21.0h")
+
+#### Relationship Between Percentage and Time
+
+**They measure different things:**
+
+| Metric | What It Measures | Denominator |
+|--------|------------------|-------------|
+| CPU% | Instantaneous capacity utilization | Number of cores |
+| CPU Time | Cumulative resource consumption | Cores × Time |
+
+**Example conversion** (24-core system, 24-hour day):
+- `avg 66%` = 66% × 24 cores × 24 hours = **380.16 core-hours** total system consumption
+- User with `15.8h` = 15.8 / 576 = **2.7% of total capacity**
+  - (576 = 24 cores × 24 hours)
+
+### GPU Metrics Definitions
+
+#### GPU Utilization (%)
+- **0%**: GPU compute units are idle
+- **100%**: GPU compute units are fully utilized
+- Measured instantaneously every 5 minutes using `nvidia-smi`
+
+#### GPU Active Hours
+- **Definition**: Total time GPU utilization was above 0%
+- **Calculation**: Count of samples where GPU% > 0, multiplied by 5 minutes
+- **Example**: `active 18.2h` = GPU was in use for 18.2 hours of the 24-hour day
+
+#### VRAM (Video RAM)
+- **Used/Total**: Current VRAM consumption vs total available
+- **Peak VRAM (per user)**: Maximum VRAM used by user's processes during the day
+
+### Summary Report Metrics
+
+#### System Metrics Section
+```
+CPU:    avg 66% | peak 100%
+RAM:    avg 39% | peak 73%
+```
+- **CPU avg/peak**: Average and maximum CPU utilization across 288 samples
+- **RAM avg/peak**: Average and maximum RAM usage across 288 samples
+
+#### GPU Metrics Section
+```
+GPU 0:  avg  61% | peak 100% | active 18.2h | VRAM 48950/49140 MB
+```
+- **avg**: Average GPU utilization across 288 samples
+- **peak**: Maximum GPU utilization observed
+- **active**: Total hours with GPU% > 0
+- **VRAM**: Peak VRAM used / Total VRAM available
+
+#### User Usage Section
+```
+User       CPU Time     GPU Time     Peak VRAM
+BoYang     15.8h        12.5h        45280 MB
+```
+- **CPU Time**: Total core-hours consumed by user's processes
+- **GPU Time**: Total hours user's processes ran on GPU
+- **Peak VRAM**: Maximum VRAM used by user's processes
+
+### Warning Thresholds
+
+The system generates warnings based on these criteria:
+- **Disk usage** > 80%
+- **Average CPU/RAM** > 80%
+- **Period CPU** > 70% (any 6-hour block)
+- **GPU idle**: avg < 10% (indicates underutilization)
+- **GPU heavy use**: active > 20 hours (indicates potential oversubscription)
+
 ## Daily Summary Report
 
 Each morning at 1:30 AM, a summary report is generated for the previous day:
