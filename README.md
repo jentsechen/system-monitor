@@ -48,7 +48,27 @@ This sets up two cron jobs:
 - **Usage collector**: Runs every 5 minutes
 - **Daily summary**: Runs daily at 1:30 AM
 
-### 2. Manual Operations
+### 2. Configure Discord Notifications (Optional)
+
+To receive daily reports on Discord:
+
+1. Create a webhook in your Discord server (Server Settings → Integrations → Webhooks)
+2. Create a `.env` file in the project root:
+
+```bash
+# .env file (NEVER commit this to git!)
+DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN"
+```
+
+3. Ensure `.env` has secure permissions:
+
+```bash
+chmod 600 .env
+```
+
+The daily summary script will automatically detect and use the webhook URL from `.env`.
+
+### 3. Manual Operations
 
 ```bash
 # Collect current usage data
@@ -352,21 +372,31 @@ The collector uses atomic writes (temp file + mv) to prevent corruption. If corr
 2. Check filesystem errors: `dmesg | grep -i error`
 3. Verify file permissions: `ls -la data/usage/`
 
-## Integration with Discord/Slack (Future)
+## Discord Integration
 
-The `generate_report_text()` function in `daily-usage-summary.sh` is separated from output handling, making it easy to add webhook notifications:
+Daily usage reports can be automatically sent to Discord via webhooks. The integration includes:
 
-```bash
-# Example Discord webhook integration (add to daily-usage-summary.sh)
-send_to_discord() {
-    local report_file=$1
-    local webhook_url="YOUR_WEBHOOK_URL"
+- **Rich Embeds**: Color-coded reports with organized sections
+- **System Metrics**: CPU, RAM, and disk usage
+- **GPU Metrics**: Per-GPU utilization, VRAM, and active hours
+- **Time-Based Analytics**: Usage breakdown by 6-hour periods
+- **User Analytics**: Per-user CPU/GPU time and VRAM consumption
+- **Process Tracking**: Top CPU consumers by user and command
+- **CPU Attribution**: MATLAB vs Python vs Other software usage
+- **Intelligent Warnings**: Color-coded alerts (green = healthy, yellow = warnings)
 
-    curl -H "Content-Type: application/json" \
-         -d "{\"content\": \"$(cat $report_file)\"}" \
-         "$webhook_url"
-}
-```
+### Configuration
+
+1. Create a `.env` file in the project root (see Quick Start section above)
+2. The daily summary script automatically loads the webhook URL
+3. Reports are sent when `daily-usage-summary.sh` runs (scheduled at 1:30 AM by default)
+
+### Security Notes
+
+- **NEVER commit `.env` to git** - it contains sensitive credentials
+- The `.gitignore` file is configured to exclude `.env` and other credential files
+- Set file permissions: `chmod 600 .env`
+- If you accidentally commit credentials, regenerate the webhook immediately
 
 ## System Requirements
 
